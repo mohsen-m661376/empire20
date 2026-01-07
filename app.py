@@ -1,166 +1,230 @@
 import streamlit as st
 import random
-import requests
-import time
 import hashlib
 import sqlite3
+import time
+import pandas as pd
+import numpy as np
 
-# --- ۱. تنظیمات امنیتی (مخصوص ادمین) ---
-# این کلید باید با کلیدی که با آن لایسنس می‌سازی یکی باشد
-SECRET_KEY = "EMPIRE-2026-SUPER-SECRET-KEY-@#$%" 
-MY_CHAT_ID = "932654521"
-MY_BOT_TOKEN = "7595178002:AAH4Tu8p97zN7yMxLh6WGyYkn3XJ438u-qI"
+# --- CONFIGURATION & ASSETS ---
+APP_NAME = "NEURO-VIRAL ARCHITECT"
+VERSION = "v4.0.0 (Ultimate)"
+SECRET_KEY = "X-77-OMEGA-SALT-KEY"
+ADMIN_ID = "932654521"
 
-# --- ۲. دیتابیس برای قفل کردن کاربر (جایگزین روش سخت‌افزاری) ---
+# --- DATABASE MANAGEMENT ---
 def init_db():
-    """ایجاد دیتابیس برای ذخیره لایسنس‌های مصرف شده"""
-    conn = sqlite3.connect('users.db')
+    conn = sqlite3.connect('empire_users.db')
     c = conn.cursor()
+    # Table for licenses
     c.execute('''CREATE TABLE IF NOT EXISTS licenses 
-                 (license_key TEXT PRIMARY KEY, user_name TEXT, is_active INTEGER)''')
+                 (license_key TEXT PRIMARY KEY, username TEXT, hardware_id TEXT, status TEXT)''')
+    # Table for user history
+    c.execute('''CREATE TABLE IF NOT EXISTS history 
+                 (username TEXT, strategy TEXT, timestamp TEXT)''')
     conn.commit()
     conn.close()
 
-def verify_and_lock_license(user_name, license_key):
-    """
-    ۱. صحت ریاضی لایسنس را چک می‌کند.
-    ۲. چک می‌کند آیا قبلاً توسط شخص دیگری استفاده شده یا خیر.
-    """
-    # گام اول: بررسی امضای ریاضی
-    try:
-        parts = license_key.split('-')
-        if len(parts) < 2: return False, "فرمت لایسنس اشتباه است."
-        
-        input_hash = parts[-1]
-        user_part = "-".join(parts[:-1]) # نام کاربر در لایسنس
-        
-        # اگر نام وارد شده با نام داخل لایسنس یکی نباشد
-        if user_part.lower() != user_name.lower():
-            return False, "این لایسنس متعلق به نام کاربری دیگری است."
+def generate_license_hash(username):
+    """Generates a secure hash license based on username"""
+    raw = f"{username.lower()}-{SECRET_KEY}"
+    return f"EMP-{hashlib.sha256(raw.encode()).hexdigest()[:12].upper()}"
 
-        # ساخت مجدد هش برای تایید
-        raw_string = f"{user_part}{SECRET_KEY}"
-        expected_hash = hashlib.sha256(raw_string.encode()).hexdigest()[:8].upper()
-        
-        if input_hash != expected_hash:
-            return False, "لایسنس نامعتبر است."
-    except:
-        return False, "خطا در پردازش لایسنس."
+def authenticate(username, key):
+    expected_key = generate_license_hash(username)
+    if key.strip() == expected_key:
+        return True
+    return False
 
-    # گام دوم: بررسی در دیتابیس (قفل لایسنس)
-    conn = sqlite3.connect('users.db')
+def check_license_in_db(username, key):
+    conn = sqlite3.connect('empire_users.db')
     c = conn.cursor()
+    c.execute("SELECT * FROM licenses WHERE license_key=?", (key,))
+    record = c.fetchone()
     
-    # آیا این لایسنس قبلا ثبت شده؟
-    c.execute("SELECT user_name FROM licenses WHERE license_key=?", (license_key,))
-    result = c.fetchone()
-    
-    if result:
-        # لایسنس قبلا استفاده شده. آیا نام کاربر همان است؟
-        saved_user = result[0]
+    if record:
+        saved_user = record[1]
         conn.close()
-        if saved_user.lower() == user_name.lower():
-            return True, "ورود موفق (کاربر قدیمی)."
+        if saved_user.lower() == username.lower():
+            return True, "✅ Identity Verified."
         else:
-            return False, "⛔ این لایسنس قبلاً توسط شخص دیگری فعال شده است!"
+            return False, "⛔ License is locked to another user."
     else:
-        # اولین بار است -> ثبت در دیتابیس
-        c.execute("INSERT INTO licenses (license_key, user_name, is_active) VALUES (?, ?, 1)", 
-                  (license_key, user_name))
-        conn.commit()
-        conn.close()
-        return True, "ورود موفق (فعالسازی جدید)."
+        # Register new license
+        if authenticate(username, key):
+            c.execute("INSERT INTO licenses VALUES (?, ?, ?, ?)", (key, username, "UNKNOWN_DEVICE", "ACTIVE"))
+            conn.commit()
+            conn.close()
+            return True, "🚀 Activation Successful. Welcome."
+        else:
+            conn.close()
+            return False, "❌ Invalid License Key."
 
-# --- ۳. محتوا ---
-TRENDS_72H = [
-    {"topic": "هوش مصنوعی مولد", "music": "Trending Techno Beats", "challenge": "AI Look-alike"},
-    {"topic": "اقتصاد غیرمتمرکز", "music": "Lo-fi Chill", "challenge": "Future Self Prediction"},
-    {"topic": "سبک زندگی مینیمال", "music": "Nature Sounds 2026", "challenge": "3-Day Fasting"}
+# --- STRATEGY ENGINE (EXPANDED) ---
+STRATEGIES = [
+    {"title": "The Pattern Interrupt", "desc": "Start video upside down for 0.5s, then flip automatically.", "score": 94},
+    {"title": "ASMR Overlay", "desc": "Layer 'crackle' sounds under your voice at 10% volume. Increases retention.", "score": 89},
+    {"title": "The Negative Hook", "desc": "Start with: 'Stop scrolling if you want to save money...'", "score": 92},
+    {"title": "Color Theory: Red", "desc": "Wear a red item or use red text. It triggers urgency algorithms.", "score": 88},
+    {"title": "Loop Perfection", "desc": "End your sentence with 'and that is why...' which leads back to the start.", "score": 96},
+    {"title": "Speed Read", "desc": "Put a long text on screen for only 1 second. Forces users to re-watch/pause.", "score": 91},
+    {"title": "Comment Bait", "desc": "Intentionally mispronounce one common word to trigger correction comments.", "score": 85},
+    {"title": "POV Shift", "desc": "Tape phone to a moving object (door, fan, car) for a unique perspective.", "score": 93},
+    {"title": "The Secret", "desc": "Whisper the most important part of the video.", "score": 87},
+    {"title": "Controversy Light", "desc": "State an unpopular opinion about a harmless topic (e.g., 'Pizza is bad').", "score": 90}
 ]
 
-class EmpireGlobalApp:
-    def __init__(self):
-        self.languages = {
-            "Persian": {"welcome": "خوش آمدید قربان", "gen_btn": "تولید محتوای آریا و لونا", "send": "ارسال به تلگرام", "success": "با موفقیت ارسال شد"},
-            "English": {"welcome": "Welcome Sir", "gen_btn": "Generate Aria & Luna Content", "send": "Send to Telegram", "success": "Sent Successfully"},
+# --- UI STYLING (MOBILE OPTIMIZED) ---
+def apply_style():
+    st.markdown("""
+    <style>
+        /* MAIN THEME */
+        .stApp {
+            background: linear-gradient(135deg, #0f0c29, #302b63, #24243e);
+            color: white;
+            font-family: 'Helvetica Neue', sans-serif;
+        }
+        /* HIDE DEFAULT STREAMLIT ELEMENTS */
+        #MainMenu {visibility: hidden;}
+        footer {visibility: hidden;}
+        header {visibility: hidden;}
+        
+        /* CARD STYLING */
+        .css-1r6slb0, .stMarkdown, .stButton {
+            text-align: center;
+        }
+        
+        /* INPUT FIELDS */
+        .stTextInput>div>div>input {
+            background-color: rgba(255, 255, 255, 0.1);
+            color: #fff;
+            border: 1px solid #4e4eae;
+            border-radius: 10px;
+            text-align: center;
         }
 
-    def generate_scenario(self, lang_name):
-        trend = random.choice(TRENDS_72H)
-        if lang_name == "Persian":
-            return (
-                f"🎬 **سناریوی مشترک آریا و لونا**\n\n"
-                f"🔥 **ترند:** {trend['topic']}\n"
-                f"🎵 **موزیک:** {trend['music']}\n"
-                f"💡 **چالش:** {trend['challenge']}\n\n"
-                f"👤 **آریا:** طبق تحلیل داده‌ها، {trend['topic']} آینده است.\n"
-                f"💃 **لونا:** چطوری فالوور بگیریم؟ با {trend['challenge']} همه رو جذب می‌کنیم! 😉"
-            )
-        return f"Viral Content for {trend['topic']} using {trend['challenge']}."
+        /* BUTTONS */
+        .stButton>button {
+            background: linear-gradient(90deg, #00d2ff 0%, #3a7bd5 100%);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 25px;
+            font-weight: bold;
+            font-size: 16px;
+            box-shadow: 0 4px 15px rgba(0, 210, 255, 0.4);
+            width: 100%;
+            transition: all 0.3s ease;
+        }
+        .stButton>button:hover {
+            transform: scale(1.02);
+            box-shadow: 0 6px 20px rgba(0, 210, 255, 0.6);
+        }
 
-    def send_to_telegram(self, message):
-        try:
-            url = f"https://api.telegram.org/bot{MY_BOT_TOKEN}/sendMessage"
-            payload = {"chat_id": MY_CHAT_ID, "text": message, "parse_mode": "Markdown"}
-            requests.post(url, data=payload, timeout=5)
-            return True
-        except:
-            return False
+        /* METRIC CARDS */
+        div[data-testid="stMetricValue"] {
+            font-size: 24px;
+            color: #00d2ff;
+        }
+    </style>
+    """, unsafe_allow_html=True)
 
-# --- ۴. رابط کاربری اصلی ---
+# --- MAIN APPLICATION ---
 def main():
-    st.set_page_config(page_title="Empire 2026", page_icon="👑", layout="centered")
-    init_db() # اطمینان از وجود دیتابیس
-    app = EmpireGlobalApp()
+    st.set_page_config(page_title="Neuro-Viral", page_icon="🧬", layout="centered")
+    apply_style()
+    init_db()
 
-    if 'auth' not in st.session_state:
-        st.session_state.auth = False
+    if 'logged_in' not in st.session_state:
+        st.session_state.logged_in = False
 
-    # --- صفحه لاگین ---
-    if not st.session_state.auth:
-        st.markdown("<h1 style='text-align: center;'>👑 EMPIRE WEB SYSTEM</h1>", unsafe_allow_html=True)
-        st.info("نسخه وب - سازگار با آیفون، اندروید و ویندوز")
+    # --- HEADER ---
+    st.markdown(f"<h1 style='text-align: center; color: #00d2ff;'>{APP_NAME}</h1>", unsafe_allow_html=True)
+    st.markdown(f"<p style='text-align: center; opacity: 0.7;'>{VERSION}</p>", unsafe_allow_html=True)
+
+    # --- LOGIN SCREEN ---
+    if not st.session_state.logged_in:
+        st.markdown("### 🔐 ACCESS CONTROL")
         
-        user_input_name = st.text_input("نام کاربری:")
-        license_key = st.text_input("کد لایسنس:", type="password")
+        # Admin Bypass Tab
+        tab1, tab2 = st.tabs(["User Login", "Admin Gen"])
         
-        if st.button("ورود به سیستم"):
-            if not user_input_name or not license_key:
-                st.warning("لطفاً نام و کد را وارد کنید.")
-            else:
-                is_valid, message = verify_and_lock_license(user_input_name, license_key)
-                
-                if is_valid:
-                    st.success(message)
-                    time.sleep(1)
-                    st.session_state.auth = True
-                    st.session_state.user = user_input_name
-                    st.rerun()
+        with tab1:
+            username = st.text_input("Username", placeholder="Enter ID")
+            key = st.text_input("License Key", type="password", placeholder="EMP-XXXX-XXXX")
+            
+            if st.button("INITIATE UPLINK"):
+                if username and key:
+                    with st.spinner("Connecting to Neural Net..."):
+                        time.sleep(1.5)
+                        success, msg = check_license_in_db(username, key)
+                        if success:
+                            st.session_state.logged_in = True
+                            st.session_state.user = username
+                            st.toast(msg, icon="✅")
+                            time.sleep(0.5)
+                            st.rerun()
+                        else:
+                            st.error(msg)
+        
+        with tab2:
+            st.warning("Admin Access Only")
+            adm_pass = st.text_input("Admin Key", type="password")
+            target_user = st.text_input("Generate for User:")
+            if st.button("Generate Key"):
+                if adm_pass == "admin2026": # Simple admin pass
+                    new_key = generate_license_hash(target_user)
+                    st.code(new_key)
                 else:
-                    st.error(message)
-        return
+                    st.error("Access Denied")
 
-    # --- پنل کاربری ---
-    st.sidebar.write(f"👤 کاربر فعال: {st.session_state.user}")
-    if st.sidebar.button("خروج"):
-        st.session_state.auth = False
-        st.rerun()
+    # --- DASHBOARD SCREEN ---
+    else:
+        st.success(f"Connection Secure: {st.session_state.user.upper()}")
+        
+        # Fake "Real-time" Analysis Graph
+        st.markdown("### 📡 ALGORITHM PULSE")
+        chart_data = pd.DataFrame(np.random.randn(20, 3), columns=["TikTok", "Insta", "YouTube"])
+        st.line_chart(chart_data)
+        
+        st.divider()
 
-    lang = st.sidebar.selectbox("Language / زبان", ["Persian", "English"])
-    texts = app.languages[lang]
-    
-    st.title(texts['welcome'])
-    
-    if st.button(texts['gen_btn'], use_container_width=True):
-        st.session_state.current_post = app.generate_scenario(lang)
-    
-    if 'current_post' in st.session_state:
-        st.info(st.session_state.current_post)
-        if st.button(texts['send'], use_container_width=True):
-            if app.send_to_telegram(st.session_state.current_post):
-                st.success(texts['success'])
-            else:
-                st.error("خطا در اتصال.")
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric(label="Viral Potential", value="High", delta="+12%")
+        with col2:
+            st.metric(label="Server Load", value="Stable", delta_color="off")
+
+        st.markdown("### 🧬 GENERATE STRATEGY")
+        if st.button("ANALYZE & DEPLOY"):
+            # Simulation of processing
+            progress_text = "Scanning Social Graph..."
+            my_bar = st.progress(0, text=progress_text)
+
+            for percent_complete in range(100):
+                time.sleep(0.01)
+                my_bar.progress(percent_complete + 1, text="Decripting Trends...")
+            
+            # Select Strategy
+            daily_seed = st.session_state.user + time.strftime("%Y%m%d")
+            random.seed(daily_seed)
+            selected = random.choice(STRATEGIES)
+            
+            st.balloons()
+            
+            # Result Card
+            st.markdown(f"""
+            <div style="background-color: rgba(255,255,255,0.05); padding: 20px; border-radius: 15px; border-left: 5px solid #00d2ff;">
+                <h3 style="color: #00d2ff;">{selected['title']}</h3>
+                <p style="font-size: 18px;">{selected['desc']}</p>
+                <hr style="border-color: rgba(255,255,255,0.1);">
+                <small>Viral Probability Score: {selected['score']}%</small>
+            </div>
+            """, unsafe_allow_html=True)
+            
+        if st.button("LOGOUT", type="secondary"):
+            st.session_state.logged_in = False
+            st.rerun()
 
 if __name__ == "__main__":
     main()
